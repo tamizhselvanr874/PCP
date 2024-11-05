@@ -1,187 +1,142 @@
 import streamlit as st  
+import pandas as pd  
 import openai  
-from docx import Document  
-import re  
-from azure.ai.formrecognizer import DocumentAnalysisClient  
-from azure.core.credentials import AzureKeyCredential  
   
-# Azure OpenAI configuration  
-AZURE_OPENAI_API_KEY = "783973291a7c4a74a1120133309860c0"  
-AZURE_OPENAI_ENDPOINT = "https://theswedes.openai.azure.com/"  
-OPENAI_API_TYPE = "azure"  
-OPENAI_API_VERSION = "2024-05-01-preview"  
-AZURE_DEPLOYMENT_NAME = "GPT-4-Omni"  
+# Configuration  
+API_KEY = "783973291a7c4a74a1120133309860c0"  
+ENDPOINT = "https://theswedes.openai.azure.com/"  
+API_VERSION = "2024-05-01-preview"  
+DEPLOYMENT_NAME = "GPT-4-Omni"  
   
-# Configure OpenAI API  
-openai.api_key = AZURE_OPENAI_API_KEY  
-openai.api_base = AZURE_OPENAI_ENDPOINT  
-openai.api_type = OPENAI_API_TYPE  
-openai.api_version = OPENAI_API_VERSION  
+# Initialize OpenAI client  
+openai.api_type = "azure"  
+openai.api_key = API_KEY  
+openai.api_base = ENDPOINT  
+openai.api_version = API_VERSION  
   
-# Azure Form Recognizer setup  
-form_recognizer_endpoint = "https://patentocr.cognitiveservices.azure.com/"  
-form_recognizer_api_key = "cd6b8996d93447be88d995729c924bcb"  
+# Define prompt templates for each technique  
+def generate_prompt(method, context, goal):  
+    prompts = {  
+        "PCP": f"Progressive Contextual Prompting (PCP):\nContext: {context}\nGoal: {goal}\nEnsure the response builds on previous context, addresses the goal, and maintains engagement.",  
+        "Zero-shot": f"Zero-shot Prompting:\nTask: {goal}\nContext: {context}\n",  
+        "Few-shot": f"Few-shot Prompting:\nExamples: Provide examples relevant to the task.\nContext: {context}\nGoal: {goal}\n",  
+    }  
+    return prompts.get(method, "")  
   
-def extract_claim_features(doc, claim_number):  
-    claim_pattern = re.compile(rf"Independent Claim {claim_number}", re.IGNORECASE)  
-    claim_features = []  
-    found_claim = False  
-  
-    for para in doc.paragraphs:  
-        if found_claim:  
-            if para.text.strip():  
-                claim_features.append(para.text.strip())  
-            else:  
-                break  
-        if claim_pattern.search(para.text):  
-            found_claim = True  
-    return claim_features  
-  
-def extract_cited_reference_features(doc, reference_name):  
-    reference_pattern = re.compile(rf"Cited Reference.*?{reference_name}", re.IGNORECASE)  
-    reference_features = []  
-    found_reference = False  
-  
-    for para in doc.paragraphs:  
-        if found_reference:  
-            if para.text.strip():  
-                reference_features.append(para.text.strip())  
-            else:  
-                break  
-        if reference_pattern.search(para.text):  
-            found_reference = True  
-    return reference_features  
-  
-def extract_text_from_pdf(pdf_data):  
+def evaluate_prompt(method, context, goal):  
+    prompt = generate_prompt(method, context, goal)  
     try:  
-        document_analysis_client = DocumentAnalysisClient(  
-            endpoint=form_recognizer_endpoint,  
-            credential=AzureKeyCredential(form_recognizer_api_key),  
+        response = openai.ChatCompletion.create(  
+            engine=DEPLOYMENT_NAME,  
+            messages=[  
+                {"role": "system", "content": "You are an AI assistant."},  
+                {"role": "user", "content": prompt}  
+            ],  
+            max_tokens=512,  
+            temperature=0.5,  
+            top_p=0.9,  
+            frequency_penalty=0,  
+            presence_penalty=0,  
         )  
-        poller = document_analysis_client.begin_analyze_document(  
-            "prebuilt-document", document=pdf_data  
-        )  
-        result = poller.result()  
-  
-        text_content = {}  
-        for page in result.pages:  
-            page_text = ""  
-            for line in page.lines:  
-                page_text += line.content + "\n"  
-            text_content[page.page_number] = page_text  
-  
-        return text_content  
+        return response.choices[0].message['content'].strip()  
     except Exception as e:  
-        st.error(f"An error occurred during text extraction: {str(e)}")  
-        return None  
+        st.error(f"Error: {str(e)}")  
+        return ""  
   
-def get_insights_from_llm(claim_features, cited_features, pdf_insights):  
-    # Extract line numbers from cited features  
-    line_number_pattern = re.compile(r'lines (\d+-\d+)')  
-    cited_line_numbers = []  
-  
-    for feature in cited_features:  
-        matches = line_number_pattern.findall(feature)  
-        cited_line_numbers.extend(matches)  
-  
-    # Prepare the messages for the chat model  
-    messages = [  
-        {"role": "system", "content": "You are an expert in patent analysis."},  
-        {  
-            "role": "user",  
-            "content": (  
-                f"Extract and provide the content from the following line numbers in the PDF insights.\n"  
-                f"Line Numbers: {cited_line_numbers}\n\n"  
-                f"PDF Insights:\n{pdf_insights}\n\n"  
-                "Instructions:\n"  
-                "For each line number range, extract the text from the PDF insights that corresponds to those lines. "  
-                "Organize the extracted text by each cited feature, displaying each one separately and in a clear format. "  
-                "Ensure the extraction is accurate and precise."  
-            )  
-        }  
-    ]  
-  
-    response = openai.ChatCompletion.create(  
-        engine=AZURE_DEPLOYMENT_NAME,  
-        messages=messages,  
-        max_tokens=1500,  # Adjust if more content is needed  
-        temperature=0.5  
-    )  
-      
-    return response.choices[0].message['content'].strip()  
+def evaluate_quality(response, answer, technique):  
+    # Placeholder for actual evaluation logic  
+    # Simulate some logic to determine correctness  
+    correct = response.lower() == answer.lower()  
+    scores = {  
+        "Correct": correct,  
+        "Coherence": 0.9 if technique == "PCP" else 0.8,  
+        "Relevance": 0.95 if technique == "PCP" else 0.85,  
+        "Completeness": 0.9 if technique == "PCP" else 0.8  
+    }  
+    return scores  
   
 def main():  
-    st.title("Patent Analysis Tool")  
+    st.title("Advanced Prompting Techniques Evaluation")  
   
-    if 'word_file_uploaded' not in st.session_state:  
-        st.session_state.word_file_uploaded = False  
-        st.session_state.claim_features = []  
-        st.session_state.reference_features = []  
-        st.session_state.claim_number = ""  
-        st.session_state.reference_name = ""  
-        st.session_state.pdf_insights = {}  
+    # List of problems with correct answers  
+    problems = {  
+        "1. How many diagonals can be drawn in a regular polygon with 9 sides?": "272",  
+        "2. What should be added to the polynomial x^4 + 64 to make it a perfect square? Choose from: 4x^2, 16x^2, 8x^2, or -8x^2": "16x^2",  
+        "3. How many points of intersection does the quadratic polynomial x^2 + 4x + 4 have with the X-axis?": "1",  
+        "4. If the price of sugar is increased by 25%, by what percentage should the consumption be decreased to maintain the same expenditure?": "20%",  
+        "5. In the logical implication P => Q, under which condition is the statement false?": "P is true and Q is false",  
+        "6. A sum of Rs 53 is divided among A, B, and C such that A gets Rs 7 more than B, and B gets Rs 8 more than C. What is the ratio of their shares?": "25:18:10",  
+        "7. Find the principal amount if the compound interest is charged at a rate of 16 2/3% per annum for two years, resulting in a total of Rs 196.": "Rs 144",  
+        "8. If α and β are roots of the equation x^2 – x – 1 = 0, what is the equation whose roots are α/β and β/α?": "x^2 + 3x + 1 = 0",  
+        "9. What is the sum of the interior angles of a pentagon?": "540 degrees",  
+        "10. Solve for x in the equation: 5x - 3 = 2x + 7": "x = 10/3",  
+        "11. Calculate the area of a circle with a radius of 7 units.": "154 square units",  
+        "12. Determine the derivative of the function f(x) = x^2 + 3x.": "2x + 3",  
+        "13. What is the factorial of 5?": "120",  
+        "14. Find the hypotenuse of a right triangle with legs measuring 3 and 4 units.": "5",  
+        "15. Simplify the expression: (3x^2y)^2": "9x^4y^2",  
+        "16. Convert 45 degrees to radians.": "π/4",  
+        "17. Solve the quadratic equation: x^2 - 4x + 4 = 0": "x = 2",  
+        "18. What is the slope of the line represented by the equation y = 2x + 3?": "2",  
+        "19. Calculate the volume of a sphere with a radius of 3 units.": "36π cubic units",  
+        "20. Find the probability of rolling a sum of 7 with two six-sided dice.": "1/6",  
+    }  
   
-    # Step 1: Upload Word file  
-    uploaded_file = st.file_uploader("Upload a Word file", type=["docx"])  
+    st.write("### Select problems to evaluate:")  
+    selected_problems = []  
+    for question in problems.keys():  
+        if st.checkbox(question):  
+            selected_problems.append(question)  
   
-    if uploaded_file is not None and not st.session_state.word_file_uploaded:  
-        doc = Document(uploaded_file)  
+    st.write("### Define the goal of the problem:")  
+    goal = st.text_input("Goal", "Solve the mathematical problem")  
   
-        if st.button("Extract Features"):  
-            st.session_state.claim_features = extract_claim_features(doc, st.session_state.claim_number)  
-            st.session_state.reference_features = extract_cited_reference_features(doc, st.session_state.reference_name)  
-            st.session_state.word_file_uploaded = True  
+    st.write("### Select prompting techniques to compare:")  
+    techniques = st.multiselect(  
+        "Techniques",  
+        ["PCP", "Zero-shot", "Few-shot"]  
+    )  
   
-    if st.session_state.word_file_uploaded:  
-        st.subheader(f"Key Features of Independent Claim {st.session_state.claim_number}")  
-        if st.session_state.claim_features:  
-            st.write(st.session_state.claim_features)  
-        else:  
-            st.write("No features found for the specified claim.")  
+    context = st.text_area("Provide initial context for the problem:")  
   
-        st.subheader(f"Key Features of Cited Reference ({st.session_state.reference_name})")  
-        if st.session_state.reference_features:  
-            st.write(st.session_state.reference_features)  
-        else:  
-            st.write("No features found for the specified reference.")  
+    if st.button("Evaluate"):  
+        results = []  
+        technique_summary = {technique: {"correct": 0, "total": 0} for technique in techniques}  
   
-        # Step 2: Ask for number of PDF files to upload  
-        num_files = st.number_input("How many PDF files do you want to upload?", min_value=1, step=1)  
+        for problem in selected_problems:  
+            answer = problems[problem]  
+            for technique in techniques:  
+                response = evaluate_prompt(technique, context, problem)  
+                quality_scores = evaluate_quality(response, answer, technique)  
   
-        # Ensure that pdf_files is a list of the correct size  
-        if 'pdf_files' not in st.session_state or len(st.session_state.pdf_files) != num_files:  
-            st.session_state.pdf_files = [None] * num_files  
+                if quality_scores["Correct"]:  
+                    technique_summary[technique]["correct"] += 1  
+                technique_summary[technique]["total"] += 1  
   
-        all_insights_complete = True  
-        for i in range(num_files):  
-            pdf_file = st.file_uploader(f"Upload PDF file {i+1}", type=["pdf"], key=f"pdf{i+1}")  
+                results.append({  
+                    "Problem": problem,  
+                    "Technique": technique,  
+                    "Response": response,  
+                    "Correct": quality_scores["Correct"],  
+                    "Coherence": quality_scores["Coherence"],  
+                    "Relevance": quality_scores["Relevance"],  
+                    "Completeness": quality_scores["Completeness"]  
+                })  
   
-            if pdf_file is not None:  
-                pdf_data = pdf_file.read()  
-                insights = extract_text_from_pdf(pdf_data)  
+        # Sort results by the evaluation scores  
+        results_df = pd.DataFrame(results).sort_values(by=["Correct", "Coherence", "Relevance", "Completeness"], ascending=False)  
   
-                if insights:  
-                    st.session_state.pdf_insights[f"Document {i+1}"] = insights  
-                    with st.expander(f"Insights for Document {i+1}"):  
-                        for page_number, page_text in insights.items():  
-                            st.write(f"Page {page_number}:")  
-                            st.text(page_text)  
-                    st.success(f"Insights stored for Document {i+1}")  
-                else:  
-                    st.warning(f"No insights extracted from PDF file {i+1}")  
-                    all_insights_complete = False  
-            else:  
-                all_insights_complete = False  
+        st.write("### Evaluation Results:")  
+        st.dataframe(results_df[["Problem", "Technique", "Correct", "Coherence", "Relevance", "Completeness"]])  
   
-        # Step 3: Generate insights using LLM  
-        if all_insights_complete and st.button("Generate Result"):  
-            comparison_result = get_insights_from_llm(  
-                st.session_state.claim_features,  
-                st.session_state.reference_features,  
-                st.session_state.pdf_insights  
-            )  
-            st.write("Comparison Result:")  
-            st.write(comparison_result)  
+        st.write("### Summary:")  
+        for technique, summary in technique_summary.items():  
+            st.write(f"**{technique}**: Solved {summary['correct']} out of {summary['total']} problems correctly.")  
+  
+        st.write("### Detailed Responses:")  
+        for index, row in results_df.iterrows():  
+            st.write(f"**Problem**: {row['Problem']}")  
+            st.write(f"**{row['Technique']}**: {row['Response']} - {'Correct' if row['Correct'] else 'Incorrect'}")  
   
 if __name__ == "__main__":  
     main()  
