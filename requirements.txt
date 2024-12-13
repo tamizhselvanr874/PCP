@@ -1,3 +1,5 @@
 streamlit
-pandas
-openai
+openai==0.28
+requests
+Pillow
+python-dotenv
